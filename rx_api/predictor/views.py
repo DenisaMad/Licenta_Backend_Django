@@ -104,7 +104,7 @@ upload_param = openapi.Parameter(
 )
 @api_view(["POST"])
 @parser_classes([MultiPartParser, FormParser])
-def predict_pdf(request):
+def predict_pdf_file(request):
     uploaded_file = request.FILES.get("file")
 
     if not uploaded_file:
@@ -154,6 +154,68 @@ def predict_pdf(request):
             },
             status=status.HTTP_200_OK,
         )
+
+    except Exception as exc:
+        return Response(
+            {"error": f"Internal error: {str(exc)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    
+@api_view(["POST"])
+def predict_pdf(request):
+    try:
+        # 🔥 aici citim direct raw body
+        file_bytes = request.body
+
+        if not file_bytes:
+            return Response(
+                {"error": "Empty request body"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 🔥 salvăm temporar PDF
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(file_bytes)
+            temp_path = tmp.name
+
+        try:
+            text = extract_text(temp_path)
+
+            if not text or not text.strip():
+                return Response(
+                    {"error": "Could not extract text from PDF."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            lines = split_lines(text)
+
+            if not lines:
+                return Response(
+                    {"error": "No usable lines found in PDF."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            predictions = model.predict(lines)
+
+            results = []
+            for line, pred in zip(lines, predictions):
+                if int(pred) == 1:
+                    extracted = extract_drug_and_dose(line)
+                    if extracted:
+                        results.append(extracted)
+
+            return Response(
+                {
+                    "total_lines": len(lines),
+                    "positive_lines": len(results),
+                    "results": results,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     except Exception as exc:
         return Response(
